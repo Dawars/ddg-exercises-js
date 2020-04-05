@@ -192,9 +192,7 @@ class Geometry {
         let edge2 = this.vector(c.halfedge.prev);
 
         let dot = edge1.dot(edge2.negated());
-        let angle = Math.acos(dot / (edge1.length() * edge2.length()));
-
-        return angle; // placeholder
+        return Math.acos(dot / (edge1.norm() * edge2.norm()));
     }
 
     /**
@@ -204,18 +202,17 @@ class Geometry {
      * @returns {number}
      */
     cotan(h) {
+        if (h.onBoundary) return 0; // if halfedge on boundary face, angle doesn't make sense, return 0 for Laplace
+
         let corner = h.corner;
-        if (corner === undefined) return 0;
 
         let edge1 = this.vector(corner.halfedge.next);
         let edge2 = this.vector(corner.halfedge.prev);
 
         let dot = edge1.dot(edge2.negated());
         let cross = edge1.cross(edge2).norm();
-        let cos = dot / (edge1.norm() * edge2.norm());  // dot product
-        let sin = cross / (edge1.norm() * edge2.norm());  // cross product
 
-        return cos / sin;
+        return dot / cross;
     }
 
     /**
@@ -226,9 +223,15 @@ class Geometry {
      * @returns {number} The dihedral angle.
      */
     dihedralAngle(h) {
-        // TODO
+        let e = this.vector(h);  // e_ij
 
-        return 0.0; // placeholder
+        let f1 = h.face;
+        let f2 = h.twin.face;
+
+        let N1 = this.faceNormal(f1);
+        let N2 = this.faceNormal(f2);
+
+        return Math.atan2(e.unit().dot(N1.cross(N2)), N1.dot(N2));
     }
 
     /**
@@ -255,9 +258,15 @@ class Geometry {
      * @returns {number}
      */
     circumcentricDualArea(v) {
-        // TODO
 
-        return 0.0; // placeholder
+        let A = 0;
+        for (let h of v.adjacentHalfedges()) {
+
+            A += this.vector(h).norm2() * this.cotan(h);
+            A += this.vector(h.prev).norm2() * this.cotan(h.prev);
+        }
+
+        return A / 8;
     }
 
     /**
@@ -286,9 +295,15 @@ class Geometry {
      * @returns {module:LinearAlgebra.Vector}
      */
     vertexNormalAreaWeighted(v) {
-        // TODO
+        let N = new Vector(0, 0, 0);
 
-        return new Vector(); // placeholder
+        for (let f of v.adjacentFaces()) {
+            let N_ijk = this.faceNormal(f);
+            let A_ijk = this.area(f);
+            N.incrementBy(N_ijk.times(A_ijk));
+        }
+
+        return N.unit();
     }
 
     /**
@@ -298,9 +313,18 @@ class Geometry {
      * @returns {module:LinearAlgebra.Vector}
      */
     vertexNormalAngleWeighted(v) {
-        // TODO
+        let N = new Vector();
 
-        return new Vector(); // placeholder
+        for (let f of v.adjacentFaces()) {
+            for (let c of f.adjacentCorners()) {
+                if (c.vertex === v) {
+                    N.incrementBy(this.faceNormal(f).times(this.angle(c)));
+                    break;
+                }
+            }
+        }
+
+        return N.unit();
     }
 
     /**
@@ -310,9 +334,15 @@ class Geometry {
      * @returns {module:LinearAlgebra.Vector}
      */
     vertexNormalGaussCurvature(v) {
-        // TODO
+        let N = new Vector();
 
-        return new Vector(); // placeholder
+        for (let h of v.adjacentHalfedges()) {
+            let theta = this.dihedralAngle(h);
+            let e = this.vector(h).unit();
+            N.incrementBy(e.times(theta));
+        }
+
+        return N.over(2).unit();
     }
 
     /**
@@ -322,9 +352,17 @@ class Geometry {
      * @returns {module:LinearAlgebra.Vector}
      */
     vertexNormalMeanCurvature(v) {
-        // TODO
+        let N = new Vector();
 
-        return new Vector(); // placeholder
+        for (let h of v.adjacentHalfedges()) {
+
+            let cotA = this.cotan(h);
+            let cotB = this.cotan(h.twin);
+
+            N.incrementBy(this.vector(h).times(cotA + cotB));
+
+        }
+        return N.unit();
     }
 
     /**
@@ -334,9 +372,17 @@ class Geometry {
      * @returns {module:LinearAlgebra.Vector}
      */
     vertexNormalSphereInscribed(v) {
-        // TODO
+        let N = new Vector();
 
-        return new Vector(); // placeholder
+        for (let h of v.adjacentHalfedges()) {
+
+            let e_ij = this.vector(h);
+            let e_ik = this.vector(h.prev.twin);
+
+            N.incrementBy(e_ij.cross(e_ik).over(e_ij.norm2() * e_ik.norm2()))
+        }
+
+        return N.unit();
     }
 
     /**
@@ -347,9 +393,17 @@ class Geometry {
      * @returns {number}
      */
     angleDefect(v) {
-        // TODO
 
-        return 0.0; // placeholder
+        let incidentAngles = 0;
+        let isBoundary = v.onBoundary();
+
+        for (let h of v.adjacentHalfedges()) {
+            let c = h.next.corner;
+            incidentAngles += this.angle(c);
+        }
+
+        if (isBoundary) return Math.PI - incidentAngles;
+        else return 2 * Math.PI - incidentAngles;
     }
 
     /**
@@ -369,9 +423,13 @@ class Geometry {
      * @returns {number}
      */
     scalarMeanCurvature(v) {
-        // TODO
+        let sum = 0;
 
-        return 0.0; // placeholder
+        for (let h of v.adjacentHalfedges()) {
+            sum += this.length(h.edge) * this.dihedralAngle(h);
+        }
+
+        return sum / 2;
     }
 
     /**
@@ -380,9 +438,10 @@ class Geometry {
      * @returns {number}
      */
     totalAngleDefect() {
-        // TODO
-
-        return 0.0; // placeholder
+        let V = this.mesh.vertices.length;
+        let E = this.mesh.edges.length;
+        let F = this.mesh.faces.length;
+        return 2 * Math.PI * (V - E + F)
     }
 
     /**
@@ -392,9 +451,11 @@ class Geometry {
      * @returns {number[]} An array containing the minimum and maximum principal curvature values at a vertex.
      */
     principalCurvatures(v) {
-        // TODO
 
-        return [0.0, 0.0]; // placeholder
+        let H = this.scalarMeanCurvature(v) / this.circumcentricDualArea(v);
+        let K = this.scalarGaussCurvature(v) / this.circumcentricDualArea(v);
+
+        return [H - Math.sqrt(H * H - K), H + Math.sqrt(H * H - K)];
     }
 
     /**
